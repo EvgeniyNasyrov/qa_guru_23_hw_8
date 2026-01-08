@@ -127,9 +127,8 @@ class EmailService:
 
 
 class LoggingEmailService(EmailService):
-    """Сервис отправки, дополнительно пишущий результат в send.log."""
 
-    LOG_FILE = "send.log"
+    LOG_FILE = "email_send.log"
 
     def send_email(self, email: Email) -> List[Email]:
         results = super().send_email(email)
