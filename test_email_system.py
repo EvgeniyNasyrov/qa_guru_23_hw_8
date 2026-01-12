@@ -150,3 +150,305 @@ class TestLoggingEmailService:
             assert "FROM me***@me.com" in content
             assert "TO yo***@you.com" in content
             assert "STATUS=sent" in content
+
+
+def test_invalid_email_no_at_symbol():
+    with pytest.raises(ValueError):
+        EmailAddress("invalid-email.com")
+
+
+def test_invalid_email_wrong_tld():
+    with pytest.raises(ValueError):
+        EmailAddress("user@test.org")
+
+
+def test_valid_email_com():
+    addr = EmailAddress("test@example.com")
+    assert str(addr) == "test@example.com"
+
+
+def test_valid_email_ru():
+    addr = EmailAddress("test@example.ru")
+    assert str(addr) == "test@example.ru"
+
+
+def test_valid_email_net():
+    addr = EmailAddress("test@example.net")
+    assert str(addr) == "test@example.net"
+
+
+def test_email_masked_format():
+    addr = EmailAddress("longname@example.com")
+    assert addr.masked == "lo***@example.com"
+
+
+def test_email_masked_short_name():
+    addr = EmailAddress("ab@example.com")
+    assert addr.masked == "ab***@example.com"
+
+
+def test_prepare_sets_ready_status():
+    email = Email(
+        subject="Test",
+        body="Body",
+        sender=EmailAddress("from@test.com"),
+        recipients=[EmailAddress("to@test.com")]
+    )
+    email.prepare()
+    assert email.status == Status.READY
+
+
+def test_prepare_sets_invalid_on_empty_subject():
+    email = Email("", "Body", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    assert email.status == Status.INVALID
+
+
+def test_prepare_sets_invalid_on_empty_body():
+    email = Email("Subj", "", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    assert email.status == Status.INVALID
+
+
+def test_prepare_sets_invalid_on_empty_sender():
+    email = Email("Subj", "Body", None, [EmailAddress("t@test.com")])
+    email.prepare()
+    assert email.status == Status.INVALID
+
+
+def test_prepare_sets_invalid_on_empty_recipients():
+    email = Email("Subj", "Body", EmailAddress("f@test.com"), [])
+    email.prepare()
+    assert email.status == Status.INVALID
+
+
+def test_add_short_body_truncates():
+    email = Email("S", "A" * 100, EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.add_short_body()
+    assert email.short_body == "A" * 20 + "..."
+
+
+def test_add_short_body_no_truncate():
+    email = Email("S", "Short", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.add_short_body()
+    assert email.short_body == "Short"
+
+
+def test_send_ready_email_creates_copies():
+    email = Email("S", "B", EmailAddress("f@test.com"), [EmailAddress("t1@test.com"), EmailAddress("t2@test.com")])
+    email.prepare()
+    service = EmailService()
+    result = service.send_email(email)
+
+    assert len(result) == 2
+    assert all(e.status == Status.SENT for e in result)
+    assert email.status == Status.READY
+
+
+def test_send_draft_email_fails():
+    email = Email("S", "B", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    service = EmailService()
+    result = service.send_email(email)
+    assert result[0].status == Status.FAILED
+    assert email.status == Status.DRAFT
+
+
+def test_send_invalid_email_fails():
+    email = Email("", "", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    service = EmailService()
+    result = service.send_email(email)
+    assert result[0].status == Status.FAILED
+
+
+def test_original_email_not_modified_after_send():
+    email = Email("S", "B", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    original_status = email.status
+
+    service = EmailService()
+    result = service.send_email(email)
+
+    assert email.status == original_status
+
+
+def test_logging_service_writes_to_file():
+    log_file = "email_send.log"
+    if os.path.exists(log_file):
+        os.remove(log_file)
+
+    email = Email("Test", "Body", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    service = LoggingEmailService()
+    service.send_email(email)
+
+    assert os.path.exists(log_file)
+    with open(log_file, encoding="utf-8") as f:
+        content = f.read()
+        assert "sent" in content.lower()
+    os.remove(log_file)
+
+
+def test_logging_service_logs_failed_emails():
+    log_file = "email_send.log"
+    if os.path.exists(log_file):
+        os.remove(log_file)
+
+    email = Email("", "", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    service = LoggingEmailService()
+    service.send_email(email)
+
+    with open(log_file, encoding="utf-8") as f:
+        content = f.read()
+        assert "failed" in content.lower()
+    os.remove(log_file)
+
+
+def test_email_repr_uses_masked_sender():
+    email = Email("S", "B", EmailAddress("sender@test.com"), [EmailAddress("r@test.com")])
+    repr_str = repr(email)
+    assert "se***@test.com" in repr_str
+
+
+def test_email_with_whitespace_in_fields():
+    email = Email("  Test  ", "  Body  ", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    assert email.subject == "Test"
+    assert email.body == "Body"
+    assert email.status == Status.READY
+
+
+def test_multiple_recipients():
+    recips = [EmailAddress(f"user{i}@test.com") for i in range(5)]
+    email = Email("S", "B", EmailAddress("f@test.com"), recips)
+    email.prepare()
+    service = EmailService()
+    result = service.send_email(email)
+    assert len(result) == 5
+
+
+def test_email_date_is_set_on_send():
+    email = Email("S", "B", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    service = EmailService()
+    result = service.send_email(email)
+    assert result[0].date is not None
+
+
+def test_email_initial_date_is_none():
+    email = Email("S", "B", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    assert email.date is None
+
+
+def test_short_body_default_length():
+    long_body = "x" * 60
+    email = Email("S", long_body, EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.add_short_body()
+    assert len(email.short_body) == 23  # 20 + ...
+
+
+def test_non_ascii_in_email():
+    email = Email("Тема", "Текст", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    assert email.status == Status.READY
+
+
+def test_email_recipients_always_list():
+    email = Email("S", "B", EmailAddress("f@test.com"), EmailAddress("t@test.com"))
+    assert isinstance(email.recipients, list)
+    assert len(email.recipients) == 1
+
+
+def test_send_to_empty_recipients_list():
+    email = Email("S", "B", EmailAddress("f@test.com"), [])
+    email.status = Status.READY
+    service = EmailService()
+    result = service.send_email(email)
+    assert result == []
+
+
+def test_logging_service_appends_to_existing_log():
+    log_file = "email_send.log"
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write("Initial\n")
+
+    email = Email("Test", "Body", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    service = LoggingEmailService()
+    service.send_email(email)
+
+    with open(log_file, encoding="utf-8") as f:
+        lines = f.readlines()
+        assert len(lines) >= 2
+        assert any("sent" in line.lower() for line in lines)
+    os.remove(log_file)
+
+
+def test_special_chars_in_email_address():
+    addr = EmailAddress("user+tag@test.com")
+    assert addr.masked == "us***@test.com"
+
+
+def test_email_with_same_sender_and_recipient():
+    addr = EmailAddress("user@test.com")
+    email = Email("S", "B", addr, addr)
+    email.prepare()
+    assert email.status == Status.READY
+
+
+def test_invalid_email_empty_string():
+    with pytest.raises(ValueError):
+        EmailAddress("")
+
+
+def test_invalid_email_only_at():
+    with pytest.raises(ValueError):
+        EmailAddress("@test.com")
+
+
+def test_invalid_email_no_domain():
+    with pytest.raises(ValueError):
+        EmailAddress("user@")
+
+
+def test_invalid_email_no_local():
+    with pytest.raises(ValueError):
+        EmailAddress("@test.com")
+
+
+def test_email_short_body_with_newlines():
+    body = "Line1\nLine2\nLine3"
+    email = Email("S", body, EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.add_short_body(10)
+    assert email.short_body == "Line1 Line..."
+
+
+def test_email_repr_with_multiple_recipients():
+    email = Email("S", "B", EmailAddress("f@test.com"), [
+        EmailAddress("r1@test.com"),
+        EmailAddress("r2@test.com")
+    ])
+    repr_str = repr(email)
+    assert "r1@test.com" in repr_str
+    assert "r2@test.com" in repr_str
+
+
+def test_send_email_does_not_modify_recipients():
+    recips = [EmailAddress("a@test.com")]
+    email = Email("S", "B", EmailAddress("f@test.com"), recips)
+    recips.append(EmailAddress("b@test.com"))
+    assert len(email.recipients) == 1
+
+
+def test_logging_service_handles_unicode():
+    log_file = "email_send.log"
+    if os.path.exists(log_file):
+        os.remove(log_file)
+
+    email = Email("Тема", "Текст", EmailAddress("f@test.com"), [EmailAddress("t@test.com")])
+    email.prepare()
+    service = LoggingEmailService()
+    service.send_email(email)
+
+    assert os.path.exists(log_file)
+    os.remove(log_file)

@@ -33,8 +33,12 @@ class EmailAddress:
         if "@" not in address:
             raise ValueError(f"Invalid email: {address}")
 
-        domain_ok = any(address.endswith(tld) for tld in (".com", ".ru", ".net"))
-        if not domain_ok:
+        local, domain = address.rsplit("@", 1)
+
+        if not local or not domain:
+            raise ValueError(f"Invalid email: {address}")
+
+        if not any(domain.endswith(tld) for tld in (".com", ".ru", ".net")):
             raise ValueError(f"Invalid email domain: {address}")
 
     @property
